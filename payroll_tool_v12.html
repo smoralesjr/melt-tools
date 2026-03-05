@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payroll Correction Tool (V12)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .drop-zone { border: 2px dashed #cbd5e1; transition: all 0.3s ease; }
+        .drop-zone.dragover { border-color: #2563eb; background-color: #f0f9ff; }
+        .file-name { font-size: 0.875rem; color: #4b5563; }
+    </style>
+</head>
+<body class="bg-gray-50 flex items-center justify-center min-h-screen p-4">
+
+    <div class="max-w-xl w-full bg-white p-8 rounded-lg shadow-md">
+        <h1 class="text-2xl font-semibold text-center text-gray-800 mb-4">Payroll Correction Tool (V12)</h1>
+        <p class="text-gray-600 text-center mb-6">
+            Upload 'Staff Commission Detail' & 'Lookup Table'.<br>
+            <span class="text-sm text-gray-500">
+                Fixes: Start at "Staff Name", Strict 12-Column Output (No Extra Cols).
+            </span>
+        </p>
+
+        <div class="space-y-6">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">1. Upload Staff Commission Detail (.csv)</label>
+                <div id="drop-zone-report" class="drop-zone p-6 text-center rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                    <input type="file" id="file-input-report" class="hidden" accept=".csv">
+                    <p class="text-gray-500">Drag & drop or click to upload</p>
+                    <p id="file-name-report" class="file-name mt-2"></p>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">2. Upload Lookup Table (.csv)</label>
+                <div id="drop-zone-lookup" class="drop-zone p-6 text-center rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                    <input type="file" id="file-input-lookup" class="hidden" accept=".csv">
+                    <p class="text-gray-500">Drag & drop or click to upload</p>
+                    <p id="file-name-lookup" class="file-name mt-2"></p>
+                </div>
+            </div>
+
+            <button id="process-button" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md font-medium hover:bg-blue-700 disabled:bg-gray-400">
+                Process Report
+            </button>
+
+            <button id="download-button" class="w-full bg-green-600 text-white py-2 px-4 rounded-md font-medium hover:bg-green-700 hidden">
+                Download Corrected Report
+            </button>
+
+            <div id="status-message" class="text-center text-sm"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const dropZoneReport = document.getElementById('drop-zone-report');
+        const fileInputReport = document.getElementById('file-input-report');
+        const fileNameReport = document.getElementById('file-name-report');
+        const dropZoneLookup = document.getElementById('drop-zone-lookup');
+        const fileInputLookup = document.getElementById('file-input-lookup');
+        const fileNameLookup = document.getElementById('file-name-lookup');
+        const processButton = document.getElementById('process-button');
+        const downloadButton = document.getElementById('download-button');
+        const statusMessage = document.getElementById('status-message');
+
+        let reportFile = null;
+        let lookupFile = null;
+        let processedCSVString = ''; 
+
+        // --- Drag & Drop Logic ---
+        function setupDropZone(dropZone, fileInput, fileNameDisplay) {
+            dropZone.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', (e) => handleFile(e.target.files[0], fileInput, fileNameDisplay));
+            dropZone.addEventListener('dragover', (e) => { 
+                e.preventDefault(); 
+                dropZone.classList.add('dragover'); 
+            });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                handleFile(e.dataTransfer.files[0], fileInput, fileNameDisplay);
+            });
+        }
+        
+        function handleFile(file, fileInput, fileNameDisplay) {
+            if (file && file.type === 'text/csv') {
+                if (fileInput.id === 'file-input-report') {
+                    reportFile = file;
+                    fileNameReport.textContent = file.name;
+                } else {
+                    lookupFile = file;
+                    fileNameLookup.textContent = file.name;
+                }
+                fileNameDisplay.classList.add('text-green-600');
+                fileNameDisplay.classList.remove('text-red-600');
+            } else {
+                if (fileInput.id === 'file-input-report') reportFile = null;
+                else lookupFile = null;
+                fileNameDisplay.textContent = file ? 'Error: Please upload a .csv file' : '';
+                fileNameDisplay.classList.add('text-red-600');
+                fileNameDisplay.classList.remove('text-green-600');
+            }
+            downloadButton.classList.add('hidden');
+            processedCSVString = '';
+        }
+
+        setupDropZone(dropZoneReport, fileInputReport, fileNameReport);
+        setupDropZone(dropZoneLookup, fileInputLookup, fileNameLookup);
+
+        // --- Parsing Utilities ---
+        function parseCSV(csvText) {
+            const lines = csvText.replace(/\r/g, '').split('\n');
+            return lines.map(line => {
+                const row = [];
+                const regex = /,(?=(?:(?:[^"]*"){2})*[^"]*$)/g;
+                const fields = line.split(regex);
+                fields.forEach(field => {
+                    let value = field.trim();
+                    if (value.startsWith('"') && value.endsWith('"')) value = value.substring(1, value.length - 1);
+                    value = value.replace(/""/g, '"');
+                    row.push(value);
+                });
+                return row;
+            });
+        }
+
+        function loadLookupMap(lookupCSV) {
+            const rows = parseCSV(lookupCSV);
+            const lookupMap = new Map();
+            const cleanAndFormatKey = (val) => {
+                if (val == null) return '';
+                const num = parseFloat(String(val).replace(/[$,"]/g, '').trim());
+                return isNaN(num) ? '' : num.toFixed(2);
+            };
+            for (let i = 1; i < rows.length; i++) {
+                if (rows[i].length >= 3) {
+                    const normalizedKey = cleanAndFormatKey(rows[i][1]);
+                    if (normalizedKey) lookupMap.set(normalizedKey, rows[i][2].trim());
+                }
+            }
+            return lookupMap;
+        }
+
+        function arrayToCSV(rows) {
+            return rows.map(row => {
+                return row.map(field => {
+                    let stringField = String(field == null ? '' : field);
+                    if (stringField.includes(',') || stringField.includes('\n') || stringField.includes('"')) {
+                        stringField = stringField.replace(/"/g, '""');
+                        return `"${stringField}"`;
+                    }
+                    return stringField;
+                }).join(',');
+            }).join('\n');
+        }
+
+        function setStatus(message, type = 'info') {
+            statusMessage.innerHTML = message;
+            statusMessage.className = 'text-center text-sm p-3 rounded-md';
+            if (type === 'error') statusMessage.classList.add('bg-red-100', 'text-red-700');
+            else if (type === 'success') statusMessage.classList.add('bg-green-100', 'text-green-700');
+            else if (type === 'loading') statusMessage.classList.add('bg-blue-100', 'text-blue-700');
+            else statusMessage.classList.add('bg-gray-100', 'text-gray-600');
+        }
+
+        // --- Processing Logic (V12) ---
+        processButton.addEventListener('click', () => {
+            if (!reportFile || !lookupFile) {
+                setStatus('Please upload both files.', 'error');
+                return;
+            }
+
+            setStatus('Processing...', 'loading');
+            processButton.disabled = true;
+            downloadButton.classList.add('hidden'); 
+
+            Promise.all([reportFile.text(), lookupFile.text()])
+            .then(([reportCSV, lookupCSV]) => {
+                const lookupMap = loadLookupMap(lookupCSV);
+                const result = processReport(reportCSV, lookupMap);
+                
+                processedCSVString = arrayToCSV(result.outputRows);
+                
+                downloadButton.classList.remove('hidden');
+                setStatus(
+                    `Processing Complete.<br>
+                     Rows Processed: ${result.processedRowCount}<br>
+                     Corrections Made: ${result.dataRowsCorrected}`,
+                    'success'
+                );
+            })
+            .catch(err => {
+                console.error(err);
+                setStatus(`Error: ${err.message}`, 'error');
+            })
+            .finally(() => {
+                processButton.disabled = false;
+            });
+        });
+
+        function processReport(reportCSV, lookupMap) {
+            const inputRows = parseCSV(reportCSV);
+            const outputRows = [];
+            
+            let processedRowCount = 0;
+            let dataRowsCorrected = 0;
+            
+            let currentSectionConvertedTotals = [];
+            let currentCommissionRate = 0.0;
+            let currentMap = null; 
+            
+            let startProcessing = false; 
+
+            // Indices
+            const STD_CLIENT = 6;
+            const STD_DESC = 7;
+            const STD_NET = 8;
+            const STD_TAX = 9;
+            const STD_TOTAL = 10;
+            const STD_CONV_TOTAL = 11; 
+            
+            // STRICT COLUMN LIMIT
+            const MAX_COLS = 12; 
+
+            // Helper to clean key for lookup
+            const getLookupKey = (val) => {
+                if (val == null) return '';
+                const num = parseFloat(String(val).replace(/[$,"]/g, '').trim());
+                return isNaN(num) ? '' : Math.abs(num).toFixed(2); 
+            };
+
+            for (const row of inputRows) {
+                const col0 = (row[0] || '').trim();
+                const col1 = (row[1] || '').trim();
+
+                // 0. Skip everything until "Staff Name" appears
+                if (!startProcessing) {
+                    if (col0.includes('Staff Name')) {
+                        startProcessing = true;
+                    } else {
+                        continue;
+                    }
+                }
+
+                // 1. "Page X" Filter
+                const pageRegex = /^Page\s+\d+/i;
+                if (pageRegex.test(col0) || pageRegex.test(col1)) continue;
+
+                // 2. Base clean row
+                let newRow = [];
+                for (let i = 0; i < MAX_COLS; i++) newRow.push('');
+                // Copy strictly first 6 columns if they exist
+                for (let i = 0; i < Math.min(row.length, 6); i++) newRow[i] = row[i];
+
+                const firstCol = row[0] || '';
+                const commissionString = row.find(cell => (cell || '').includes('Total Commission'));
+
+                // Case A: Staff Name (Reset)
+                if (firstCol.includes('Staff Name')) {
+                    currentSectionConvertedTotals = [];
+                    currentMap = null;
+                    newRow = [...row]; 
+                }
+                // Case B: Commission Rate (Set)
+                else if (firstCol.includes('Commission @')) {
+                    currentSectionConvertedTotals = [];
+                    currentMap = null; 
+                    try {
+                        const rateStr = firstCol.split('@')[1].split('%')[0].trim();
+                        currentCommissionRate = parseFloat(rateStr) / 100.0;
+                    } catch (e) { currentCommissionRate = 0.0; }
+                    newRow = [...row];
+                }
+                // Case C: Section Header
+                else if (row.includes('Client Name') && row.includes('Net')) {
+                    const cIdx = row.findIndex(c => c.trim() === 'Client Name');
+                    const nIdx = row.findIndex(c => c.trim() === 'Net');
+                    let dIdx = row.findIndex(c => {
+                        const t = c.trim().toLowerCase();
+                        return t === 'description' || t === 'item name' || t === 'service' || t === 'item';
+                    });
+                    const taxIdx = row.findIndex(c => c.trim() === 'Tax');
+                    const tIdx = row.findIndex((c, i) => i > taxIdx && c.trim() === 'Total');
+
+                    currentMap = { c: cIdx, d: dIdx, n: nIdx, tax: taxIdx, t: tIdx };
+
+                    newRow[STD_CLIENT] = 'Client Name';
+                    newRow[STD_DESC] = 'Description';
+                    newRow[STD_NET] = 'Net';
+                    newRow[STD_TAX] = 'Tax';
+                    newRow[STD_TOTAL] = 'Total';
+                    newRow[STD_CONV_TOTAL] = 'Converted Total';
+                }
+                // Case D: Data Row
+                else if (currentMap && (currentMap.c !== -1 || currentMap.n !== -1)) {
+                    const valNet = currentMap.n !== -1 ? (row[currentMap.n] || '') : '';
+                    const valClient = currentMap.c !== -1 ? (row[currentMap.c] || '') : '';
+                    const isData = valClient.trim() || valNet.trim();
+                    const isSubtotal = !valClient.trim() && valNet.trim();
+
+                    if (isData) {
+                        // Align Data
+                        if (currentMap.c !== -1) newRow[STD_CLIENT] = row[currentMap.c];
+                        if (currentMap.d !== -1) newRow[STD_DESC] = row[currentMap.d];
+                        if (currentMap.n !== -1) newRow[STD_NET] = row[currentMap.n];
+                        if (currentMap.tax !== -1) newRow[STD_TAX] = row[currentMap.tax];
+                        if (currentMap.t !== -1) newRow[STD_TOTAL] = row[currentMap.t];
+
+                        // Correction Logic
+                        if (valNet.trim()) {
+                            const rawNum = parseFloat(String(valNet).replace(/[$,"]/g, '').trim());
+                            let convertedVal = valNet;
+
+                            if (!isNaN(rawNum)) {
+                                const isNegative = rawNum < 0;
+                                const absKey = getLookupKey(rawNum);
+                                const lookupResult = lookupMap.get(absKey) || absKey;
+                                
+                                let numResult = parseFloat(String(lookupResult).replace(/[$,"]/g, '').trim());
+                                if (!isNaN(numResult)) {
+                                    if (isNegative) numResult = -Math.abs(numResult);
+                                    convertedVal = numResult.toFixed(2);
+                                } else {
+                                    convertedVal = lookupResult; 
+                                }
+                                
+                                if (Math.abs(rawNum).toFixed(2) !== Math.abs(numResult).toFixed(2)) {
+                                     if (!isSubtotal) dataRowsCorrected++;
+                                }
+
+                                if (!isSubtotal) {
+                                    currentSectionConvertedTotals.push(numResult);
+                                    newRow[STD_CONV_TOTAL] = convertedVal;
+                                } else {
+                                    const sectionSum = currentSectionConvertedTotals.reduce((a, b) => a + b, 0);
+                                    newRow[STD_CONV_TOTAL] = sectionSum.toFixed(2);
+                                }
+                            }
+                        }
+                    } else {
+                         newRow = [...row];
+                    }
+                }
+                // Case E: Commission Calculation
+                else if (commissionString) {
+                    let rate = currentCommissionRate; 
+                    try {
+                        const rateStr = commissionString.split('%')[0].split(' ').pop().trim();
+                        if (rateStr) rate = parseFloat(rateStr) / 100.0;
+                    } catch (e) { }
+
+                    const sectionSum = currentSectionConvertedTotals.reduce((a, b) => a + b, 0);
+                    const newCommission = sectionSum * rate;
+                    
+                    newRow[0] = row[0]; 
+                    newRow[STD_CONV_TOTAL] = newCommission.toFixed(2);
+                    
+                    currentSectionConvertedTotals = [];
+                }
+                // Case F: Fallback
+                else {
+                    newRow = [...row];
+                }
+
+                // --- FINAL TRUNCATION STEP ---
+                // Forces the row to be exactly 12 columns, removing any garbage data from the end
+                if (newRow.length > MAX_COLS) {
+                    newRow = newRow.slice(0, MAX_COLS);
+                }
+                while (newRow.length < MAX_COLS) {
+                    newRow.push('');
+                }
+
+                outputRows.push(newRow);
+                processedRowCount++;
+            }
+
+            return { outputRows, processedRowCount, dataRowsCorrected };
+        }
+
+        // --- Download Logic ---
+        downloadButton.addEventListener('click', () => {
+            if (!processedCSVString) {
+                alert("No data available.");
+                return;
+            }
+            const blob = new Blob([processedCSVString], { type: 'text/csv' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'processed_commission_report_v12.csv';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+    </script>
+</body>
+</html>
