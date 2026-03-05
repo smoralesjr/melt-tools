@@ -319,17 +319,16 @@
                                 const isNegative = rawNum < 0;
                                 const absKey = getLookupKey(rawNum);
                                 const lookupResult = lookupMap.get(absKey) || absKey;
-                                
+
                                 let numResult = parseFloat(String(lookupResult).replace(/[$,"]/g, '').trim());
                                 if (!isNaN(numResult)) {
                                     if (isNegative) numResult = -Math.abs(numResult);
                                     convertedVal = numResult.toFixed(2);
+                                    if (Math.abs(rawNum).toFixed(2) !== Math.abs(numResult).toFixed(2)) {
+                                        if (!isSubtotal) dataRowsCorrected++;
+                                    }
                                 } else {
                                     convertedVal = lookupResult; 
-                                }
-                                
-                                if (Math.abs(rawNum).toFixed(2) !== Math.abs(numResult).toFixed(2)) {
-                                     if (!isSubtotal) dataRowsCorrected++;
                                 }
 
                                 if (!isSubtotal) {
